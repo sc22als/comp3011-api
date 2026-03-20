@@ -1,109 +1,91 @@
-from fastapi import FastAPI, HTTPException, Depends, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from pydantic import BaseModel
+from flask import Flask, request, jsonify
 import sqlite3
 import secrets
+import os
+from functools import wraps
 
-app = FastAPI(
-    title="Goodreads Book API",
-    description="Coursework 1 API for Book Data",
-    version="1.0.0"
-)
-
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the Book API!"}
+app = Flask(__name__)
 
 
-# --- 1. Authentication Setup ---
-# This tells FastAPI we are using Basic HTTP Authentication
-security = HTTPBasic()
-
-def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
-    """
-    This function checks if the user has provided the correct login details.
-    We use 'secrets.compare_digest' to securely check the strings.
-    """
-    is_correct_username = secrets.compare_digest(credentials.username, "admin")
-    is_correct_password = secrets.compare_digest(credentials.password, "leeds2026")
-    
-    if not (is_correct_username and is_correct_password):
-        # If the details are wrong, we return a 401 Unauthorised error
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
-
-
-# --- 2. Database Connection Helper ---
+# --- 1. Database Connection Helper ---
 def get_db_connection():
-    """Opens a connection to the SQLite database and allows column name access."""
-    conn = sqlite3.connect('books.db')
-    conn.row_factory = sqlite3.Row 
+    # This automatically finds the database in the same folder as this script, 
+    # fixing the PythonAnywhere path issue instantly!
+    db_path = os.path.join(os.path.dirname(__file__), 'books.db')
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     return conn
 
 
-# --- 3. Data Models ---
-class BookCreate(BaseModel):
-    bookID: int
-    title: str
-    authors: str
-    average_rating: float
+# --- 2. Authentication Setup ---
+def check_auth(username, password):
+    return secrets.compare_digest(username, "admin") and secrets.compare_digest(password, "leeds2026")
 
 
-class BookUpdate(BaseModel):
-    average_rating: float
+def authenticate():
+    return jsonify({"message": "Unauthorised. Correct credentials required."}), 401, {'WWW-Authenticate': 'Basic realm="Login Required"'}
 
 
-# --- 4. CRUD Endpoints ---
-# READ: Get a list of books (Open to everyone)
-@app.get("/books")
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
+
+# --- 3. CRUD Endpoints ---
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"message": "Welcome to the Book API!"})
+
+
+# READ: Get a list of books
+@app.route("/books", methods=["GET"])
 def get_books():
     conn = get_db_connection()
     books = conn.execute('SELECT bookID, title, authors, average_rating FROM books LIMIT 10').fetchall()
     conn.close()
-    return [dict(book) for book in books]
+    return jsonify([dict(book) for book in books])
 
 
-# CREATE: Add a new book (Open to everyone for now)
-@app.post("/books", status_code=201)
-def add_book(book: BookCreate):
+# CREATE: Add a new book
+@app.route("/books", methods=["POST"])
+def add_book():
+    data = request.get_json()
     conn = get_db_connection()
     try:
         conn.execute('INSERT INTO books (bookID, title, authors, average_rating) VALUES (?, ?, ?, ?)',
-                     (book.bookID, book.title, book.authors, book.average_rating))
+                     (data['bookID'], data['title'], data['authors'], data['average_rating']))
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
-        raise HTTPException(status_code=400, detail="Book ID already exists")
+        return jsonify({"detail": "Book ID already exists"}), 400
     conn.close()
-    return {"message": "Book added successfully!"}
+    return jsonify({"message": "Book added successfully!"}), 201
 
 
-# UPDATE: Change a book's rating (Open to everyone)
-@app.put("/books/{book_id}")
-def update_book(book_id: int, book: BookUpdate):
+# UPDATE: Change a book's rating
+@app.route("/books/<int:book_id>", methods=["PUT"])
+def update_book(book_id):
+    data = request.get_json()
     conn = get_db_connection()
-    cursor = conn.execute('UPDATE books SET average_rating = ? WHERE bookID = ?', (book.average_rating, book_id))
+    cursor = conn.execute('UPDATE books SET average_rating = ? WHERE bookID = ?', (data['average_rating'], book_id))
     conn.commit()
     rows_affected = cursor.rowcount
     conn.close()
     
     if rows_affected == 0:
-        raise HTTPException(status_code=404, detail="Book not found")
-    return {"message": f"Book {book_id} updated successfully"}
+        return jsonify({"detail": "Book not found"}), 404
+    return jsonify({"message": f"Book {book_id} updated successfully"})
 
 
-# DELETE: Remove a book (SECURED: Only 'admin' can do this)
-@app.delete("/books/{book_id}")
-def delete_book(book_id: int, username: str = Depends(verify_credentials)):
-    """
-    Notice the 'Depends(verify_credentials)' above. 
-    FastAPI will pause the request, check the login details, 
-    and only run this code if the user is authorised.
-    """
+# DELETE: Remove a book (SECURED)
+@app.route("/books/<int:book_id>", methods=["DELETE"])
+@requires_auth
+def delete_book(book_id):
     conn = get_db_connection()
     cursor = conn.execute('DELETE FROM books WHERE bookID = ?', (book_id,))
     conn.commit()
@@ -111,5 +93,8 @@ def delete_book(book_id: int, username: str = Depends(verify_credentials)):
     conn.close()
     
     if rows_affected == 0:
-        raise HTTPException(status_code=404, detail="Book not found")
-    return {"message": f"Book {book_id} deleted successfully by {username}"}
+        return jsonify({"detail": "Book not found"}), 404
+    return jsonify({"message": f"Book {book_id} deleted successfully by admin"})
+
+if __name__ == '__main__':
+    app.run(debug=True)
