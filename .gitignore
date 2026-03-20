@@ -7,7 +7,7 @@ venv/
 .env/
 
 # Ignore .csv file
-*.csv
+# *.csv
 
 # Ignore database files (optional)
 # *.db
