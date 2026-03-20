@@ -10,7 +10,7 @@ venv/
 *.csv
 
 # Ignore database files (optional)
-*.db
+# *.db
 
 # Ignore system files
 .DS_Store
