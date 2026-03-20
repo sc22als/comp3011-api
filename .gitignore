@@ -1,0 +1,16 @@
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore virtual environments (if you use one)
+venv/
+.env/
+
+# Ignore .csv file
+*.csv
+
+# Ignore database files (optional)
+*.db
+
+# Ignore system files
+.DS_Store
