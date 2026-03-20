@@ -1,6 +1,8 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 import sqlite3
+import secrets
 
 app = FastAPI(
     title="Goodreads Book API",
@@ -13,14 +15,37 @@ def read_root():
     return {"message": "Welcome to the Book API!"}
 
 
-# --- 1. Database Connection Helper ---
+# --- 1. Authentication Setup ---
+# This tells FastAPI we are using Basic HTTP Authentication
+security = HTTPBasic()
+
+def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
+    """
+    This function checks if the user has provided the correct login details.
+    We use 'secrets.compare_digest' to securely check the strings.
+    """
+    is_correct_username = secrets.compare_digest(credentials.username, "admin")
+    is_correct_password = secrets.compare_digest(credentials.password, "leeds2026")
+    
+    if not (is_correct_username and is_correct_password):
+        # If the details are wrong, we return a 401 Unauthorised error
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+
+# --- 2. Database Connection Helper ---
 def get_db_connection():
+    """Opens a connection to the SQLite database and allows column name access."""
     conn = sqlite3.connect('books.db')
-    conn.row_factory = sqlite3.Row # Allows us to access columns by name
+    conn.row_factory = sqlite3.Row 
     return conn
 
 
-# --- 2. Data Models (Shows clean architecture!) ---
+# --- 3. Data Models ---
 class BookCreate(BaseModel):
     bookID: int
     title: str
@@ -32,8 +57,8 @@ class BookUpdate(BaseModel):
     average_rating: float
 
 
-# --- 3. CRUD Endpoints ---
-# READ: Get a list of books
+# --- 4. CRUD Endpoints ---
+# READ: Get a list of books (Open to everyone)
 @app.get("/books")
 def get_books():
     conn = get_db_connection()
@@ -42,7 +67,7 @@ def get_books():
     return [dict(book) for book in books]
 
 
-# CREATE: Add a new book
+# CREATE: Add a new book (Open to everyone for now)
 @app.post("/books", status_code=201)
 def add_book(book: BookCreate):
     conn = get_db_connection()
@@ -57,7 +82,7 @@ def add_book(book: BookCreate):
     return {"message": "Book added successfully!"}
 
 
-# UPDATE: Change a book's rating
+# UPDATE: Change a book's rating (Open to everyone)
 @app.put("/books/{book_id}")
 def update_book(book_id: int, book: BookUpdate):
     conn = get_db_connection()
@@ -71,9 +96,14 @@ def update_book(book_id: int, book: BookUpdate):
     return {"message": f"Book {book_id} updated successfully"}
 
 
-# DELETE: Remove a book
+# DELETE: Remove a book (SECURED: Only 'admin' can do this)
 @app.delete("/books/{book_id}")
-def delete_book(book_id: int):
+def delete_book(book_id: int, username: str = Depends(verify_credentials)):
+    """
+    Notice the 'Depends(verify_credentials)' above. 
+    FastAPI will pause the request, check the login details, 
+    and only run this code if the user is authorised.
+    """
     conn = get_db_connection()
     cursor = conn.execute('DELETE FROM books WHERE bookID = ?', (book_id,))
     conn.commit()
@@ -82,4 +112,4 @@ def delete_book(book_id: int):
     
     if rows_affected == 0:
         raise HTTPException(status_code=404, detail="Book not found")
-    return {"message": f"Book {book_id} deleted successfully"}
+    return {"message": f"Book {book_id} deleted successfully by {username}"}
